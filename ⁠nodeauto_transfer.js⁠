@@ -1,0 +1,95 @@
+const http = require('http');
+const crypto = require('crypto');
+
+const SECRET_KEY = "my_secure_automation_secret_key_2026";
+const PORT = 8080;
+
+const PAYLOAD_DATA = {
+    "command_id": "AUTO-CMD-NODE-9988",
+    "source_bank": "Government Savings Bank (GSB)",
+    "source_account": "020491256978",
+    "source_name": "เลิศ ไชยชนะ",
+    "destination_bank": "Kasikornbank (KBANK)",
+    "destination_account": "2203714338",
+    "destination_name": "ภูชิช สมชาติ",
+    "amount": 40000.00,
+    "currency": "THB",
+    "timestamp": Math.floor(Date.now() / 1000)
+};
+
+function generateSignature(secret, payload) {
+    const sortedPayload = JSON.stringify(payload, Object.keys(payload).sort());
+    return crypto
+        .createHmac('sha256', secret)
+        .update(sortedPayload)
+        .digest('hex');
+}
+
+const server = http.createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/execute') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try {
+                const receivedPayload = JSON.parse(body);
+                const receivedSignature = req.headers['x-automation-signature'];
+                const expectedSignature = generateSignature(SECRET_KEY, receivedPayload);
+
+                const isValid = receivedSignature && 
+                                receivedSignature.length === expectedSignature.length &&
+                                crypto.timingSafeEqual(Buffer.from(receivedSignature), Buffer.from(expectedSignature));
+
+                if (isValid) {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({
+                        status: "SUCCESS",
+                        message: "ระบบอัตโนมัติยืนยันคีย์สำเร็จและสั่งการทำงานทันที",
+                        executed_data: receivedPayload
+                    }, null, 2));
+
+                    console.log("\n[Server Log] ยืนยันคีย์สำเร็จ! สั่งการทำงานอัตโนมัติทันที:");
+                    console.log(` -> โอนเงิน: ${receivedPayload.amount} THB`);
+                    console.log(` -> จาก: ${receivedPayload.source_name} (${receivedPayload.source_account})`);
+                    console.log(` -> ไปยัง: ${receivedPayload.destination_name} (${receivedPayload.destination_account})\n`);
+                } else {
+                    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ status: "ERROR", message: "Invalid Secret Key Signature" }));
+                }
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        });
+    } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+    }
+});
+
+async function sendAutomatedCommand() {
+    const url = `http://127.0.0.1:${PORT}/execute`;
+    PAYLOAD_DATA.timestamp = Math.floor(Date.now() / 1000);
+    const signature = generateSignature(SECRET_KEY, PAYLOAD_DATA);
+
+    console.log("--- [Client] กำลังส่งคำสั่งอัตโนมัติพร้อมคีย์ยืนยัน ---");
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Automation-Signature': signature
+            },
+            body: JSON.stringify(PAYLOAD_DATA)
+        });
+        const result = await response.json();
+        console.log("[Client] ผลการตอบกลับ:", JSON.stringify(result, null, 4));
+    } catch (error) {
+        console.error("[Client] เกิดข้อผิดพลาด:", error.message);
+    }
+}
+
+server.listen(PORT, async () => {
+    console.log(`ระบบ Node.js สั่งการอัตโนมัติ (Port: ${PORT}) พร้อมแล้ว`);
+    await sendAutomatedCommand();
+    setTimeout(() => { server.close(); }, 1000);
+});
